@@ -1,0 +1,135 @@
+# koopgen configuration.
+# Everything under `preregistered:` is frozen before the first pipeline run (SHA-256 of this file
+# in PREREGISTRATION.md). Thresholds are never changed after results are seen.
+
+seed: 20261015                 # master seed; every subsidiary seed is derived from it
+
+data:
+  train_frac: 0.70
+  min_length: 4000             # so that N_test / 6 >= 200 points per window
+  dt_rel_tol: 0.01             # max relative deviation of a sampling interval from the median
+  stationarity_alpha: 0.05
+
+embedding:
+  max_lag: 100
+  ami_bins: 16
+  ami_floor_factor: 3.0        # AMI minima within 3x the histogram bias floor (B-1)^2/(2N) are rejected
+  m_min: 2
+  m_max: 10
+  cao_threshold: 0.90
+  cao_saturation_tol: 0.05
+  cao_saturation_min: 0.80
+  cao_max_points: 3000
+  cao_e2_tol: 0.10             # E2(d) within 0.1 of 1 for all d => stochastic => tau = 1
+  tau_override: null
+  m_override: null
+
+features:
+  n_features: 512              # F
+  sensitivity_n_features: [256, 1024]
+
+model:
+  likelihood: gaussian         # gaussian | student_t (optional extension, not default)
+  prior:
+    log_s_sd: 1.0              # log s ~ N(log median pairwise train-state distance, 1)
+    log_alpha_lin: [0.0, 3.0]  # mean, sd
+    log_alpha_rff: [0.0, 3.0]
+    log_sigma: [-2.302585, 3.0]  # centred at log 0.1 (standardised data)
+  max_pairs_median: 2000       # states subsampled for the median pairwise distance
+  sigma_floor: 1.0e-3          # nugget: sigma_eff^2 = sigma^2 + floor^2 (train-SD units); see model.sigma_eff
+
+mcmc:
+  # Run length is set by precision (ESS), not by a fixed draw count; see mcmc.py. Each chain draws
+  # in chunks until its own min(bulk, tail) ESS over all theta components reaches
+  # target_ess / num_chains (and >= min_samples), capped at max_samples = the original 25,000 per
+  # chain. Measured on the development machine (20 logical CPUs, N_train = 7000, F = 512): ~22
+  # likelihood+gradient evaluations/s with 4 chain processes x 5 threads. A fixed 4 x (5000 +
+  # 25000) run would take ~10 h; the ESS-targeted run reaches 4x the ESS gate in a fraction of it.
+  num_chains: 4
+  num_warmup: 1000             # Laplace-whitened start: adaptation converges quickly
+  target_ess: 4000             # 4x the pre-registered ESS gate (1000)
+  min_samples: 1000
+  max_samples: 25000
+  chunk: 500
+  target_accept: 0.80
+  max_tree_depth: 10
+  remediation_target_accept: [0.90, 0.95, 0.99]   # used, in order, only if the gates fail
+  smoke: {num_chains: 2, num_warmup: 150, target_ess: 100, min_samples: 150, max_samples: 150}
+  sensitivity: {num_chains: 4, num_warmup: 500, target_ess: 1500, min_samples: 500, max_samples: 10000}
+
+spectrum:
+  n_draws: 500
+  resdmd_threshold: 0.10       # residual above which an eigenpair is flagged spurious
+  instability_delta: 0.01      # |mu| > 1 + delta counts as unstable (if non-spurious)
+
+generate:
+  n_series: 500                # M
+  burn_in: 500
+  divergence_factor: 10.0      # |y| > 10 x train SD
+  innovations: gaussian        # gaussian | residual_bootstrap (sensitivity)
+
+forecast:
+  n_origins: 60
+  horizon: 50
+  n_members: 200
+
+metrics:
+  window_length: 500           # <= 2000; capped at floor(N_test / 6) (>= 3 windows per test half)
+  min_window_length: 200
+  window_stride: 50
+  acf_lags: 50
+  pacf_lags: 20
+  welch_nperseg: 256
+  quantiles: [0.05, 0.25, 0.5, 0.75, 0.95]
+  rqa: {rr: 0.05, theiler: 1, lmin: 2, vmin: 2}
+  d2: {c_lo: 1.0e-3, c_hi: 5.0e-2, n_r: 40}           # theiler = ceil(mean period of train)
+  lle: {rise_lo: 0.2, rise_hi: 0.7, k_max_periods: 5, k_max_min: 30}   # theiler = ceil(mean period)
+  sampen: {m: 2, r_frac: 0.2}
+  permen: {order: 4, delay: 1}
+  tra_lags: [1, 2, 3, 5, 10]
+  c3_lags: [1, 2, 3, 5]
+  koopman_freq: {rows: 40, rank: 10, f_min: 0.002}
+
+preregistered:
+  decision:
+    null_quantile: 0.95        # pass if W1(real, gen) <= q95 of the block-bootstrap null
+    null_construction: disjoint_halves   # two MBB resamples, one from each half of the test set
+    secondary_ppc_null: {enabled: true, n_stretches: 100}   # reported, not gated
+    n_null: 1000
+    block_windows: auto        # auto = window_length / window_stride consecutive windows
+    ppp_interval: [0.025, 0.975]
+    max_divergence_rate: 0.05
+    max_nan_rate_excess: 0.05  # generator fails a statistic if its NaN rate exceeds real's by > 0.05
+    verdict_rule: >-
+      PRESERVED = every gated statistic passes; PARTIALLY PRESERVED = at least one gated group
+      (linear, nonlinear) passes in full; NOT PRESERVED = no group passes in full, or MCMC gates
+      fail after remediation, or divergence rate > max; INCONCLUSIVE = controls lack power.
+  invariants:
+    n_series: 100              # synthetic series (full test length) used for the invariants table
+  statistics:
+    linear: [acf, pacf, psd, mean, variance, quantiles, ks_marginal, koopman_freq]
+    nonlinear: [rqa_det, rqa_lam, rqa_lmean, rqa_lmax, rqa_entr, rqa_tt, rqa_rte, d2, lle,
+                sampen, permen, time_reversal, c3]
+  controls:
+    shuffle_must_fail: [acf, pacf, psd]
+    iaaft_must_fail_min_nonlinear: 1
+  pretest:
+    n_surrogates: 999
+    alpha: 0.05                # Holm across the nonlinear statistics, two-sided rank test
+    max_length: 2000
+    statistics: [rqa_det, rqa_lam, rqa_lmean, rqa_lmax, rqa_entr, rqa_tt, rqa_rte, d2, lle,
+                 sampen, permen, time_reversal, c3]
+  mcmc_gates:
+    rhat_max: 1.01
+    ess_bulk_min: 1000
+    ess_tail_min: 1000
+    divergences_max: 0
+    ebfmi_min: 0.30
+  benchmarks:
+    lle_rel_tol: 0.25          # |est - theory| / theory
+    d2_abs_tol: 0.25
+
+benchmarks:
+  lorenz: {n: 10000, dt: 0.05, transient: 100.0}
+  henon: {n: 10000, transient: 1000, obs_noise: 0.01}
+  ar2: {n: 10000, transient: 1000, phi1: 1.2, phi2: -0.6}
