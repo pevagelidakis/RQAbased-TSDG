@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "koopgen"
+version = "0.1.0"
+description = "Bayesian kernel-Koopman generator for dynamics-preserving synthetic time series"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy", "scipy", "pandas", "pyarrow", "jax[cpu]", "numpyro", "arviz", "h5netcdf",
+    "numba", "statsmodels", "matplotlib", "pyyaml",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.scripts]
+koopgen = "koopgen.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+koopgen = ["*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: long-running tests (deselect with -m 'not slow')"]
